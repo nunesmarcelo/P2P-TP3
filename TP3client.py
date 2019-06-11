@@ -1,9 +1,15 @@
 #!/usr/bin/python3
 
-#   TP 3 - Redes - P2P
-#   Marcelo Nunes da Silva
-#   Wanderson Sena
+# __________________________
+# |  TP 3 - Redes - P2P     |
+# |  Marcelo Nunes da Silva |
+# |  Wanderson Sena         |
+# |_________________________|
 
+# Commands:
+# ? chave -> procura um valor na rede, passando uma chave buscada.
+# T -> Solicita a topologia da rede
+# Q -> Sair
 
 import socket , sys , os , struct , select
 
@@ -13,17 +19,27 @@ class TP3client:
             print("./TP3client <porto-local> <ip:porto>")
             os._exit(1)
 
-        self.port = sys.argv[1]
-        self.serverIp = sys.argv[2]
-        self.socketsList = { }
-        self.socketsList['stdin'] = sys.stdin
-        self.nseq = 0
+        try:
+            # Input data from terminal
+            self.port = sys.argv[1]
+            self.serverIp = sys.argv[2]
 
-        # Create accept socket and the socket to communicate with the servent.
-        self.createInitialSockets()
+            # List of sockets
+            self.socketsList = { }
+            self.socketsList['stdin'] = sys.stdin
 
-        # Start to listen the user commands and the answer received from the servents
-        self.listenCommandsAndAnswers()
+            # Number of sequence, to treat repeated cases
+            self.nseq = 0
+
+            # Create accept socket and the socket to communicate with the servent.
+            self.createInitialSockets()
+
+            # Start to listen the user commands and the answer received from the servents
+            self.listenCommandsAndAnswers()
+        except KeyboardInterrupt:
+            for con in self.socketsList:
+                self.socketsList[con].close() 
+            os._exit(1)
 
     def createInitialSockets(self):
         # 0 = self socket (listening to answers) ,  self.serverIp = servent
@@ -31,16 +47,18 @@ class TP3client:
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # Create a TCP/IP socket
             
             # Bind the socket to the port
-            myaddress = ('', int(self.port))
-            print (  'starting up on %s port %s' % myaddress)
-            client.bind(myaddress)
-            # Listen for incoming connections - 1000 =  high arbitrary value. =)
-            client.listen(100)
+            #print ('Escutando no endereço "'+ str( socket.gethostbyname(socket.getfqdn()) ) +'" e port "'+ self.port +'"')
+            #print('-'*20)
+            client.bind(("", int(self.port)))
+            # Listen for incoming connections
+            client.listen()
+
+          
 
             self.socketsList['0'] = client
 
         except socket.error as e:
-            print ('Could not bind the socket connection ' , e)
+            print ('Falha ao conectar com o servent informado.' , e)
             os._exit(1)
             
 
@@ -59,6 +77,7 @@ class TP3client:
             self.socketsList[ self.serverIp]  = servent
         except ConnectionRefusedError:
             print("Connection failure. " , self.serverIp)
+            os._exit(1)
         except socket.error:
             print ('Could not connect to servent ')
             os._exit(1)
@@ -76,9 +95,15 @@ class TP3client:
 
                         # read command and remove \n or \0 to avoid mistakes
                         command = sock.readline().replace('\0',"").replace('\n',"")
-
                         
-                        if ( (command[0] == "?" and (command[1] == " " or command[1] == '\t')) or (command == "T" or command == 't') ):
+                        if(command == "" or command == "?"):
+                            print("Comando desconhecido")
+                            continue
+                        
+                        elif ( (command[0] == "?" and (command[1] == " " or command[1] == '\t')) or (command == "T" or command == 't') ):
+                            
+                            # Before send request, update the nseq value
+                            self.nseq += 1
 
                             # --------------- KEYREQ MESSAGE -----------------
                             if(command[0] == "?" and (command[1] == " " or command[1] == '\t')):
@@ -93,28 +118,28 @@ class TP3client:
                             # Ask for the value in the key entered by the user
                             self.socketsList[self.serverIp].send( messageKEYREQorTOPOREQ )
 
-                            # Count for 4 seconds for a connection answer
+                            # Count for 4 seconds for a connection respond
                             try:
                                 self.socketsList['0'].settimeout(4)
                                 connection, client_address = self.socketsList['0'].accept()
-                                print ('new connection from: ', client_address)
                                 self.socketsList[client_address] = connection
                                 
                             except socket.timeout:
-                                print("Nenhuma resposta recebida")
-                                #self.socketsList[client_address].close()                    
+                                print("Nenhuma resposta recebida")                   
 
                         elif(command == "Q" or command == 'q'):
                             raise KeyboardInterrupt
                         else:
                             print("Comando desconhecido")
+                    
 
-
-                    # ----------   If is a new connection ----------------
-                    # elif sock is self.socketsList['0']:
-                    #     print("enviar esse código para o final do recebimento do cliente! conexão")
-                        
-
+                    elif sock is self.socketsList['0']:
+                        # Giving chance to another to respond
+                        try:
+                            connection, client_address = sock.accept()
+                            self.socketsList[client_address] = connection
+                        except socket.timeout:
+                            continue
                     # ----------   Data is comming ------------------------
                     else:
                         #  RESP 
@@ -148,26 +173,13 @@ class TP3client:
                                 # Remove connection
                                 del self.socketsList[ sock.getpeername() ]
                                 sock.close()
-                                
-                                # Giving chance to another to respond
-                                try:
-                                    self.socketsList['0'].settimeout(4)
-                                    connection, client_address = self.socketsList['0'].accept()
-                                    print ('new connection from: ', client_address)
-                                    #connection.setblocking(0)
-                                    self.socketsList[client_address] = connection
-                                except socket.timeout:
-                                    continue
                         else:
                             raise KeyboardInterrupt
         except KeyboardInterrupt:
-            print("Closing connections...")
-            for x in self.socketsList:
-                self.socketsList[x].close()
-            os._exit(0)
+            raise KeyboardInterrupt
+        except Exception as e:
+            print("Linha 177:",e)
+            raise
 
 if __name__ == "__main__":
-    try:
-        node = TP3client()
-    except KeyboardInterrupt:
-        os._exit(0)
+    node = TP3client()

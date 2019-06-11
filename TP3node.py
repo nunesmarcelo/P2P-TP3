@@ -1,8 +1,10 @@
 #!/usr/bin/python3
 
-#   TP 3 - Redes - P2P
-#   Marcelo Nunes da Silva
-#   Wanderson Sena
+# __________________________
+# |  TP 3 - Redes - P2P     |
+# |  Marcelo Nunes da Silva |
+# |  Wanderson Sena         |
+# |_________________________|
 
 import select , socket , sys , os , threading , struct
 
@@ -13,11 +15,14 @@ class TP3node:
             os._exit(1)
 
         try:
+            # Port given in terminal
             self.port = sys.argv[1]
 
+            # Socket and port lists
             self.socketsList = {}
             self.portsList = {}
 
+            # List to protect against duplicate sends
             self.receivedMessages = []
 
             # Read dict -> key value from file
@@ -33,9 +38,8 @@ class TP3node:
             self.startListenIO()
 
         except KeyboardInterrupt:
-            print("Removendo IPs...")
-            for x in self.socketsList:
-                self.socketsList[x].close() 
+            for con in self.socketsList:
+                self.socketsList[con].close() 
             os._exit(1)
         
     def readDb(self):
@@ -59,45 +63,47 @@ class TP3node:
 
     def createGeneralSocket(self):
         try:
-            
             # Create a TCP/IP socket
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server.setblocking(0)
 
             # Bind the socket to the port
-            server_address = ('', int(self.port))
-            print (  'starting up on %s port %s' % server_address)
-            server.bind(server_address)
+            #print ('Escutando no endereço "'+str( socket.gethostbyname(socket.getfqdn()) )+ ' " e porto "'+self.port+'"' )
+            #print('-'*20)
+            server.bind(('', int(self.port)))
 
             # Listen for incoming connections 
             server.listen()
 
-            # Sockets from which we expect to read
+            # Socket that we expect for read
             self.socketsList['0'] = server
-            #self.portsList['0'] = 'server'
         except KeyboardInterrupt:
             raise KeyboardInterrupt
-        except socket.error:
-            os._exit(1)
+        except socket.error as e:
+            print(e)
+            raise KeyboardInterrupt
      
     def readInputNeighbors(self):
         try:
+            # third argument on are the addresses
             addresses = sys.argv[3:]
             for address in set(addresses):
                 conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
                     conn.connect( (address.split(':')[0] , int( address.split(':')[1]) ) ) 
 
-                    # > big-endian, padrão do TCP/IP
+                    # > big-endian, TCP/IP pattern
                     # h short integer - 2 bytes
                     messageId = struct.pack('>h', 4) + struct.pack('>h', 0)   
 
-                    # messageId is used to warn the other side
+                    # messageId is used to warn the other side that we want to connect
                     conn.send( messageId )
-                    self.socketsList[ address ] = conn
-                    self.portsList[ address ] = 0
+                    self.socketsList[ (address.split(":")[0] , int(address.split(":")[1]) ) ] = conn
+                    self.portsList[ (address.split(":")[0] , int(address.split(":")[1]) )  ] = 0
+
                 except ConnectionRefusedError:
-                    print("Connection failure. " , address)
+                    print("Falha ao conectar. Outro lado possivelmente desconectado " , address)
+                    raise KeyboardInterrupt
         except KeyboardInterrupt:
             raise KeyboardInterrupt
 
@@ -112,10 +118,11 @@ class TP3node:
                     if sock is self.socketsList['0']:
                         # A "readable" server socket is ready to accept a connection
                         connection, client_address = sock.accept()
-                        print ('new connection from: ', client_address)
+                        
+                        # Set blocking false, just client use timeouts.
                         connection.setblocking(0)
                         self.socketsList[client_address] = connection
-                    # Else -> data is coming
+                    # Else data is coming
                     else:
                         data = sock.recv(2)
                         
@@ -127,12 +134,15 @@ class TP3node:
                             
                             # ID
                             if(valueType == 4):
-                                portOrZero = struct.unpack('>h', sock.recv(2) )[0] # receive message type
-                                print("Chegou mensagem tipo ID, porto:" , portOrZero)
                                 if sock.getpeername() not in self.socketsList:
-                                    print("não estava na lista!")
-                                    os._exit(1)
+                                    print("Mensagem ID recebida de algum desconhecido!")
+                                    #os._exit(1)
+                                    continue
+
+                                # if another servent, port = 0 , otherwise port != 0
+                                portOrZero = struct.unpack('>h', sock.recv(2) )[0]
                                 self.portsList[ sock.getpeername() ] = portOrZero
+                                #print("Recebida mensagem tipo 4 (ID) do porto:" , portOrZero)
 
                             # KEYREQ
                             elif(valueType == 5 ):
@@ -145,14 +155,17 @@ class TP3node:
                                     searchedKey += bytes.decode( sock.recv(1) )
                                     i+=1
 
+                                #print("começando a floodar, recebido de:" , sock.getpeername())
                                 # Mounting KEYFLOOD MESSAGE 
-                                self.createKEYFLOODorTOPOFLOOD(7,4,nseq,sock.getpeername()[0], self.portsList[ sock.getpeername() ], len(searchedKey) , searchedKey)
+                                self.createKEYFLOODorTOPOFLOOD(7,4,nseq,sock.getpeername()[0], self.portsList[ sock.getpeername() ], len(searchedKey) , searchedKey, sock.getpeername())
 
-                            # TOPOREQ
+                            # TOPOREQ - requests the network topology
                             elif(valueType == 6):
-                               nseq = struct.unpack('>i', sock.recv(4) )[0] # unpack: > big-endian , i integer - 4 bytes
-                               self.createKEYFLOODorTOPOFLOOD(6,4,nseq,sock.getpeername()[0] , self.socketsList(sock.getpeername()),0,"" )
-                            # KEYFLOOD
+                                nseq = struct.unpack('>i', sock.recv(4) )[0] # unpack: > big-endian , i integer - 4 bytes
+                                # Mounting KEYFLOOD MESSAGE 
+                                self.createKEYFLOODorTOPOFLOOD(8,4,nseq,sock.getpeername()[0] , self.portsList[sock.getpeername()],0,"", sock.getpeername() )
+                            
+                            # KEYFLOOD - receives a package, treats and spreads
                             elif(valueType == 7 or valueType == 8):
                                 ttl = struct.unpack('>h', sock.recv(2) )[0]        # unpack: > big-endian , h short integer - 2 bytes
                                 nseq = struct.unpack('>i', sock.recv(4) )[0]       # unpack: > big-endian , i integer - 4 bytes
@@ -166,10 +179,11 @@ class TP3node:
                                     info += bytes.decode( sock.recv(1) )
                                     i+=1
 
-                                self.createKEYFLOODorTOPOFLOOD(valueType,ttl,nseq,ip_orig,porto_orig,len(info),info)
+                                # Mounting KEYFLOOD MESSAGE 
+                                self.createKEYFLOODorTOPOFLOOD(valueType,ttl,nseq,ip_orig,porto_orig,len(info),info , sock.getpeername())
                         else:
                             # Interpret empty result as closed connection
-                            print (  'closing ', sock.getpeername(), ' after reading no data')
+                            #print ('Fechando conexão com ', sock.getpeername(), ', pois o outro lado já está fechado.')
                             # Stop listening for input on the connection
                             del self.socketsList[sock.getpeername()]
                             sock.close()
@@ -189,32 +203,36 @@ class TP3node:
             tempSocket.connect( ( ip, port ) )
             tempSocket.send( messageRESP )
             tempSocket.close()
-            print("enviado: " , data)
-        except socket.error:
-            print("Connection failure with the port informed.")
+            #print("Dado enviado: " , data)
+        except socket.error as e:
+            print("Falha ao enviar na porta recebida." , (ip, port) , e )
 
-    def createKEYFLOODorTOPOFLOOD(self , tipo , ttl, nseq , ip_orig , porto_orig , tamanho , info):
+    def createKEYFLOODorTOPOFLOOD(self , tipo , ttl, nseq , ip_orig , porto_orig , tamanho , info , sentBy):
         #+---- 2 ------+- 2 -+-- 4 -+--- 4 ---+----- 2 ----+--- 2 ---+----------\\--------------+
         #| TIPO = 7, 8 | TTL | NSEQ | IP_ORIG | PORTO_ORIG | TAMANHO | INFO (até 400 carateres) |
         #+-------------+-----+------+---------+------------+---------+----------\\--------------+
 
-        ttl -= 1
-        # repeated message or ttl expired = failure.
+        ttl -= 1 # decrease ttl before compare
+
+        # repeated message or ttl expired. package can be thrown away and flooding canceled
         if( (ip_orig,porto_orig,nseq) in self.receivedMessages or ttl == 0):
             return
 
+        # Used for treat repeat flooding
         self.receivedMessages.append( (ip_orig,porto_orig,nseq) )
 
         # If my db has this key, send this value to client:
         if( (tipo == 5 or tipo == 7) and info in self.db.keys()):
             # data = db value , ip = ip of sender , port = port that client gave me , nseq = came inside the package
             self.replyToClient(nseq ,  self.db[info] , ip_orig , porto_orig )
+
+        # Topo requests add the own address and send to the client
         if( tipo == 6 or tipo == 8):
             info += str( socket.gethostbyname(socket.getfqdn())) + ":" + str(self.port) + " "  
             tamanho += len( str( socket.gethostbyname(socket.getfqdn()) ) + ":" + str(self.port) + " "   )
             self.replyToClient(nseq , info , ip_orig , porto_orig)
 
-        # Flood data
+        # Flooding data
         message = (struct.pack('>h', tipo) +
             struct.pack('>h', ttl) +        # pack: > big-endian , h short integer - 2 bytes
             struct.pack('>i', nseq) +       # pack: > big-endian , i integer - 4 bytes
@@ -223,16 +241,14 @@ class TP3node:
             struct.pack('>h', len(info)) +  # pack: > big-endian , h short integer - 2 bytes
             str.encode(info))
         
+        # Send to all servents sockets
         for neighbor in self.socketsList:
-            self.socketsList[ neighbor ].send(message)
+            if neighbor == '0':
+                continue
 
-            # broken pipe...
-    
-
-
+            if self.portsList[neighbor] == 0 and neighbor != sentBy :
+                self.socketsList[ neighbor ].send(message)
+   
 
 if __name__ == "__main__":
-    try:
-        node = TP3node()
-    except KeyboardInterrupt:
-        os._exit(0)
+    node = TP3node()
